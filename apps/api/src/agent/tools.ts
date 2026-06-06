@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import type { HuellaClient } from "@huella/supabase";
+import type { HuellaClient, Json } from "@huella/supabase";
 
 export interface ToolContext {
   db: HuellaClient;
@@ -219,13 +219,37 @@ export function buildInternalTools(ctx: ToolContext) {
 export function buildExternalTools(ctx: ToolContext) {
   const { db, organizationId, rawEventId, senderContactId } = ctx;
 
+  async function ensureDonorId(): Promise<string | null> {
+    if (!senderContactId) return null;
+    const { data: existing } = await db
+      .from("donors")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("contact_id", senderContactId)
+      .maybeSingle();
+    if (existing) return existing.id;
+
+    const { data: created, error } = await db
+      .from("donors")
+      .insert({
+        organization_id: organizationId,
+        contact_id: senderContactId,
+        donor_type: "individual",
+        status: "active",
+      })
+      .select("id")
+      .single();
+    if (error) return null;
+    return created.id;
+  }
+
   return {
     list_active_campaigns: tool({
       description:
-        "Lista las campañas de donación activas. Usar cuando alguien quiere donar y hay que mostrarle opciones.",
+        "Lista las campañas activas para personas que quieren ayudar. Usar al inicio del flujo externo.",
       inputSchema: z.object({
         campaign_type: z
-          .enum(["money", "goods"])
+          .enum(["money", "goods", "accompaniment"])
           .nullish()
           .describe("Filtrar por tipo, opcional"),
       }),
@@ -244,54 +268,144 @@ export function buildExternalTools(ctx: ToolContext) {
       },
     }),
 
-    register_donation: tool({
+    reserve_accompaniment: tool({
       description:
-        "Registra la intención de donación a una campaña. Dinero → genera link de pago (simulado). Bienes → la marca para retiro por un voluntario.",
+        "Reserva por 15 minutos el proximo perfil seguro libre de una campaña elegida. Usar despues de que la persona elige campaña.",
       inputSchema: z.object({
         campaign_id: z
           .string()
-          .describe("UUID de la campaña elegida (de list_active_campaigns)"),
-        donation_type: z.enum(["money", "goods"]),
-        amount: z.number().nullish().describe("Monto, para donaciones de dinero"),
+          .describe("UUID de la campaña elegida, obtenido de list_active_campaigns"),
+      }),
+      execute: async (input) => {
+        const donorId = await ensureDonorId();
+        if (!donorId) return { ok: false as const, error: "No se pudo identificar a la persona" };
+
+        const { data, error } = await db.rpc("reserve_next_beneficiary", {
+          p_organization_id: organizationId,
+          p_campaign_id: input.campaign_id,
+          p_donor_id: donorId,
+          p_ttl_minutes: 15,
+        });
+        if (error) return { ok: false as const, error: error.message };
+
+        const reservation = data?.[0];
+        if (!reservation) {
+          await markRawEvent(db, rawEventId, { detectedIntent: "no_available_profiles" });
+          return {
+            ok: false as const,
+            reason: "no_profiles_available",
+            message: "No hay perfiles disponibles en esta campaña. Ofrece lista de espera u otra campaña.",
+          };
+        }
+
+        await markRawEvent(db, rawEventId, { detectedIntent: "accompaniment_reserved" });
+        return {
+          ok: true as const,
+          match_id: reservation.match_id,
+          beneficiary_id: reservation.beneficiary_id,
+          reserved_until: reservation.reserved_until,
+          safe_profile: reservation.safe_profile,
+        };
+      },
+    }),
+
+    confirm_accompaniment: tool({
+      description:
+        "Confirma la reserva activa cuando la persona explicita compromiso con dinero o especie. No espera pago real ni entrega validada.",
+      inputSchema: z.object({
+        modality: z.enum(["money", "goods"]),
+        amount: z.number().nullish().describe("Monto comprometido si colabora con dinero"),
         items: z
           .array(z.object({ item: z.string(), qty: z.number().int().nullish() }))
           .nullish()
-          .describe("Bienes ofrecidos, para donaciones de especie"),
+          .describe("Bienes prometidos si colabora en especie"),
       }),
       execute: async (input) => {
-        const isMoney = input.donation_type === "money";
-        const { data, error } = await db
+        const donorId = await ensureDonorId();
+        if (!donorId) return { ok: false as const, error: "No se pudo identificar a la persona" };
+
+        const { data: activeMatch, error: matchError } = await db
+          .from("matches")
+          .select("id, campaign_id, beneficiary_id, reserved_until")
+          .eq("organization_id", organizationId)
+          .eq("donor_id", donorId)
+          .eq("status", "reserved")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (matchError) return { ok: false as const, error: matchError.message };
+        if (!activeMatch?.campaign_id || !activeMatch.beneficiary_id) {
+          return { ok: false as const, reason: "no_active_reservation" };
+        }
+
+        if (activeMatch.reserved_until && new Date(activeMatch.reserved_until).getTime() < Date.now()) {
+          await db.from("matches").update({ status: "expired" }).eq("id", activeMatch.id);
+          await db.from("beneficiaries").update({ status: "available" }).eq("id", activeMatch.beneficiary_id);
+          return { ok: false as const, reason: "reservation_expired" };
+        }
+
+        const isMoney = input.modality === "money";
+        const items = (input.items ?? []) satisfies Json;
+        const { data: donation, error } = await db
           .from("donations")
           .insert({
             organization_id: organizationId,
             raw_event_id: rawEventId,
             contact_id: senderContactId ?? null,
-            campaign_id: input.campaign_id,
-            donation_type: input.donation_type,
+            donor_id: donorId,
+            campaign_id: activeMatch.campaign_id,
+            donation_type: input.modality,
             amount: input.amount ?? null,
-            items: input.items ?? [],
-            status: isMoney ? "pending" : "pending_pickup",
+            items,
+            status: "committed",
           })
           .select("id")
           .single();
         if (error) return { ok: false as const, error: error.message };
-        await markRawEvent(db, rawEventId, { detectedIntent: "donation" });
+
+        await db
+          .from("matches")
+          .update({
+            donation_id: donation.id,
+            status: "confirmed",
+            modality: input.modality,
+            confirmed_at: new Date().toISOString(),
+          })
+          .eq("id", activeMatch.id);
+
+        await db
+          .from("beneficiaries")
+          .update({ status: "confirmed" })
+          .eq("id", activeMatch.beneficiary_id);
+
+        if (isMoney && input.amount) {
+          const { data: campaign } = await db
+            .from("campaigns")
+            .select("current_amount")
+            .eq("id", activeMatch.campaign_id)
+            .maybeSingle();
+          await db
+            .from("campaigns")
+            .update({ current_amount: (campaign?.current_amount ?? 0) + input.amount })
+            .eq("id", activeMatch.campaign_id);
+        }
+
+        await markRawEvent(db, rawEventId, { detectedIntent: "accompaniment_confirmed" });
 
         if (isMoney) {
-          // Link de Mercado Pago SIMULADO (sin integración real con la API).
-          const paymentLink = `https://mpago.example/huella-demo?donation=${data.id}${
+          const paymentLink = `https://mpago.example/huella-demo?donation=${donation.id}${
             input.amount ? `&amount=${input.amount}` : ""
           }`;
           await db
             .from("donations")
             .update({ payment_link: paymentLink })
-            .eq("id", data.id);
-          return { ok: true as const, donation_id: data.id, payment_link: paymentLink };
+            .eq("id", donation.id);
+          return { ok: true as const, donation_id: donation.id, payment_link: paymentLink };
         }
         return {
           ok: true as const,
-          donation_id: data.id,
-          message: "Donación de bienes registrada; un voluntario coordinará el retiro.",
+          donation_id: donation.id,
+          message: "Aporte en especie registrado; el equipo coordinara la entrega.",
         };
       },
     }),

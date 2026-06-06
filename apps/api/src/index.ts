@@ -5,6 +5,8 @@ import { cors } from "hono/cors";
 import { getDb } from "./lib/supabase";
 import { captureRawEvent } from "./lib/capture";
 import { runPipeline } from "./agent/pipeline";
+import { resetDemoData } from "./lib/demo";
+import { tryHandleExternalAccompaniment } from "./lib/accompaniment";
 
 // apps/api — captura-primero (raw_events) + pipeline conversacional (Vercel AI SDK)
 const app = new Hono();
@@ -15,6 +17,17 @@ const DEMO_ORG_ID =
 
 app.get("/", (c) => c.json({ service: "huella-api", status: "ok" }));
 app.get("/health", (c) => c.json({ status: "ok", ts: new Date().toISOString() }));
+
+app.post("/demo/reset", async (c) => {
+  const organizationId = c.req.query("organizationId") ?? DEMO_ORG_ID;
+  try {
+    const result = await resetDemoData(getDb(), organizationId);
+    return c.json({ ok: true, organizationId, ...result });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "No se pudo reiniciar la demo";
+    return c.json({ ok: false, error: message }, 500);
+  }
+});
 
 app.get("/dashboard", async (c) => {
   const organizationId = c.req.query("organizationId") ?? DEMO_ORG_ID;
@@ -32,6 +45,10 @@ app.get("/dashboard", async (c) => {
     activitiesResult,
     campaignsResult,
     donationsResult,
+    beneficiariesResult,
+    matchesResult,
+    donorsResult,
+    contactsResult,
     membersResult,
     programsResult,
   ] = await Promise.all([
@@ -69,6 +86,21 @@ app.get("/dashboard", async (c) => {
       .eq("organization_id", organizationId)
       .order("created_at", { ascending: false })
       .limit(50),
+    db
+      .from("beneficiaries")
+      .select("id, location, needs, status, created_at")
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: true })
+      .limit(100),
+    db
+      .from("matches")
+      .select("id, campaign_id, beneficiary_id, donor_id, donation_id, status, reserved_until, confirmed_at, modality, created_at")
+      .eq("organization_id", organizationId)
+      .in("status", ["reserved", "confirmed"])
+      .order("created_at", { ascending: false })
+      .limit(100),
+    db.from("donors").select("id, contact_id").eq("organization_id", organizationId),
+    db.from("contacts").select("id, name").eq("organization_id", organizationId),
     db.from("members").select("id, full_name").eq("organization_id", organizationId),
     db.from("programs").select("id, name").eq("organization_id", organizationId),
   ]);
@@ -79,6 +111,10 @@ app.get("/dashboard", async (c) => {
     activitiesResult,
     campaignsResult,
     donationsResult,
+    beneficiariesResult,
+    matchesResult,
+    donorsResult,
+    contactsResult,
     membersResult,
     programsResult,
   ].find((result) => result.error);
@@ -99,6 +135,8 @@ app.get("/dashboard", async (c) => {
   const campaignsById = new Map(
     (campaignsResult.data ?? []).map((campaign) => [campaign.id, campaign.name]),
   );
+  const donorsById = new Map((donorsResult.data ?? []).map((donor) => [donor.id, donor]));
+  const contactsById = new Map((contactsResult.data ?? []).map((contact) => [contact.id, contact]));
 
   const rawEvents = rawEventsResult.data ?? [];
   const tasks = (tasksResult.data ?? []).map((task) => ({
@@ -120,6 +158,57 @@ app.get("/dashboard", async (c) => {
       ? campaignsById.get(donation.campaign_id) ?? "No encontrada"
       : "Sin campaña",
   }));
+  const matches = matchesResult.data ?? [];
+  const activeMatchesByBeneficiaryId = new Map(
+    matches
+      .filter((match) => match.beneficiary_id)
+      .map((match) => [match.beneficiary_id, match]),
+  );
+  const beneficiaries = (beneficiariesResult.data ?? []).map((beneficiary) => ({
+    ...beneficiary,
+    safe_profile: getSafeProfile(beneficiary.needs),
+  }));
+  const accompaniments = campaigns.map((campaign) => {
+    const profiles = beneficiaries
+      .filter((beneficiary) => beneficiary.safe_profile.campaign_id === campaign.id)
+      .sort((a, b) => a.safe_profile.sort_order - b.safe_profile.sort_order);
+    const items = profiles.map((beneficiary) => {
+      const match = activeMatchesByBeneficiaryId.get(beneficiary.id);
+      const donor = match?.donor_id ? donorsById.get(match.donor_id) : null;
+      const contact = donor?.contact_id ? contactsById.get(donor.contact_id) : null;
+      const status = match?.status === "confirmed"
+        ? "acompañado"
+        : match?.status === "reserved"
+          ? "en proceso"
+          : "disponible";
+      return {
+        beneficiary_id: beneficiary.id,
+        match_id: match?.id ?? null,
+        status,
+        helper_label: match ? contact?.name ?? "Persona externa" : null,
+        modality: formatModality(match?.modality ?? null),
+        reserved_until: match?.reserved_until ?? null,
+        confirmed_at: match?.confirmed_at ?? null,
+        safe_profile: beneficiary.safe_profile,
+      };
+    });
+    const committedAmount = donations
+      .filter((donation) => donation.campaign_id === campaign.id && donation.status === "committed")
+      .reduce((total, donation) => total + (donation.amount ?? 0), 0);
+    return {
+      campaign_id: campaign.id,
+      campaign_name: campaign.name,
+      total: items.length,
+      available: items.filter((item) => item.status === "disponible").length,
+      in_process: items.filter((item) => item.status === "en proceso").length,
+      accompanied: items.filter((item) => item.status === "acompañado").length,
+      committed_amount: committedAmount,
+      promised_goods: donations
+        .filter((donation) => donation.campaign_id === campaign.id && donation.donation_type === "goods" && donation.status === "committed")
+        .flatMap((donation) => formatDonationItems(donation.items)),
+      items,
+    };
+  }).filter((campaign) => campaign.total > 0);
 
   const donationAmount = donations.reduce(
     (total, donation) => total + (donation.amount ?? 0),
@@ -139,14 +228,52 @@ app.get("/dashboard", async (c) => {
       ),
       donations: donations.length,
       donationAmount,
+      accompaniedProfiles: accompaniments.reduce(
+        (total, campaign) => total + campaign.accompanied,
+        0,
+      ),
     },
     rawEvents,
     tasks,
     activities,
     campaigns,
     donations,
+    accompaniments,
   });
 });
+
+function getSafeProfile(value: unknown) {
+  const profile = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    campaign_id: typeof profile.campaign_id === "string" ? profile.campaign_id : null,
+    label: typeof profile.profile_label === "string" ? profile.profile_label : "Perfil seguro",
+    neighborhood: typeof profile.neighborhood === "string" ? profile.neighborhood : "Sin barrio",
+    composition: typeof profile.composition === "string" ? profile.composition : "Sin composicion",
+    primary_need: typeof profile.primary_need === "string" ? profile.primary_need : "Sin necesidad principal",
+    suggested_amount: typeof profile.suggested_amount === "number" ? profile.suggested_amount : null,
+    goods_suggestion: typeof profile.goods_suggestion === "string" ? profile.goods_suggestion : null,
+    sort_order: typeof profile.sort_order === "number" ? profile.sort_order : 999,
+  };
+}
+
+function formatModality(value: string | null) {
+  if (value === "money") return "dinero";
+  if (value === "goods") return "especie";
+  return null;
+}
+
+function formatDonationItems(items: unknown) {
+  if (!Array.isArray(items)) return [];
+  return items.map((item) => {
+    if (typeof item !== "object" || item === null) return "aporte en especie";
+    const record = item as { item?: unknown; qty?: unknown };
+    const name = typeof record.item === "string" ? record.item : "aporte en especie";
+    const qty = typeof record.qty === "number" ? ` x${record.qty}` : "";
+    return `${name}${qty}`;
+  });
+}
 
 interface ChatBody {
   text?: string;
@@ -208,6 +335,17 @@ app.post("/chat", async (c) => {
     senderMemberId,
     senderContactId,
   });
+
+  if (!isMember && senderContactId) {
+    const directReply = await tryHandleExternalAccompaniment({
+      db,
+      organizationId,
+      rawEventId,
+      senderContactId,
+      text,
+    });
+    if (directReply) return c.json({ reply: directReply, rawEventId, isMember, steps: 0 });
+  }
 
   // 2) Pipeline conversacional (rama según whitelist).
   const { reply, steps } = await runPipeline({

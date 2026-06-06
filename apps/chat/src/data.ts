@@ -20,7 +20,8 @@ export interface Sender {
 export const SENDERS: Sender[] = [
   { id: "maria", label: "María (coordinadora)", phone: "+5493410000001", isMember: true },
   { id: "pedro", label: "Pedro (campo)", phone: "+5493410000002", isMember: true },
-  { id: "externo", label: "Donante externo", phone: "+5499999999999", isMember: false },
+  { id: "externo-1", label: "Persona externa 1", phone: "+5499999999999", isMember: false },
+  { id: "externo-2", label: "Persona externa 2", phone: "+5499999999998", isMember: false },
 ];
 
 export const CHATS: Chat[] = [
@@ -30,27 +31,7 @@ export const CHATS: Chat[] = [
     subtitle: "captura · en línea",
     avatarColor: "#00a884",
     initials: "H",
-    messages: [
-      {
-        id: "m1",
-        author: "them",
-        text: "¡Hola! Contame qué pasó hoy y lo registro. Podés mandarme texto, audio o una foto.",
-        time: "08:02",
-      },
-      {
-        id: "m2",
-        author: "me",
-        text: "Hoy taller en Ludueña, vinieron 22 chicos, faltó material",
-        time: "18:41",
-        status: "read",
-      },
-      {
-        id: "m3",
-        author: "them",
-        text: "✅ Registrado. Detecté dos cosas:\n• Actividad: Taller en Ludueña — 22 asistentes\n• Tarea: reponer material faltante",
-        time: "18:41",
-      },
-    ],
+    messages: [],
   },
   {
     id: "coordinacion",

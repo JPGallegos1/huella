@@ -7,6 +7,7 @@ const TABS = [
   { id: "capture", label: "Captura" },
   { id: "coordination", label: "Coordinación" },
   { id: "impact", label: "Impacto" },
+  { id: "accompaniments", label: "Acompañamientos" },
   { id: "donations", label: "Donaciones" },
 ] as const;
 
@@ -91,6 +92,8 @@ function renderTab(tab: TabId, data: DashboardData) {
       return <CoordinationTab data={data} />;
     case "impact":
       return <ImpactTab data={data} />;
+    case "accompaniments":
+      return <AccompanimentsTab data={data} />;
     case "donations":
       return <DonationsTab data={data} />;
   }
@@ -103,6 +106,7 @@ function SummaryTab({ data }: { data: DashboardData }) {
       <Metric label="Tareas abiertas" value={data.summary.openTasks} />
       <Metric label="Actividades" value={data.summary.activities} />
       <Metric label="Asistentes totales" value={data.summary.totalAttendees} />
+      <Metric label="Familias acompañadas" value={data.summary.accompaniedProfiles} />
       <Metric label="Donaciones" value={data.summary.donations} />
       <Metric label="Monto registrado" value={formatMoney(data.summary.donationAmount, "ARS")} />
     </section>
@@ -206,6 +210,72 @@ function ImpactTab({ data }: { data: DashboardData }) {
   );
 }
 
+function AccompanimentsTab({ data }: { data: DashboardData }) {
+  return (
+    <section className="accompaniment-list">
+      {data.accompaniments.map((campaign) => {
+        const progress = getProgress(campaign.accompanied, campaign.total);
+        return (
+          <article className="panel accompaniment-panel" key={campaign.campaign_id}>
+            <div className="panel-title">
+              <div>
+                <h2>{campaign.campaign_name}</h2>
+                <p>
+                  {campaign.accompanied} de {campaign.total} familias acompañadas · {campaign.in_process} en proceso · {campaign.available} disponibles
+                </p>
+              </div>
+              <div className="accompaniment-money">
+                <span>Comprometido</span>
+                <strong>{formatMoney(campaign.committed_amount, "ARS")}</strong>
+              </div>
+            </div>
+
+            <div className="progress-bar large"><span style={{ width: `${progress}%` }} /></div>
+
+            {campaign.promised_goods.length > 0 ? (
+              <p className="goods-line">Bienes prometidos: {campaign.promised_goods.join(", ")}</p>
+            ) : null}
+
+            <div className="profile-grid">
+              {campaign.items.map((item) => (
+                <article className="profile-card" key={item.beneficiary_id}>
+                  <div className="feed-topline">
+                    <span className={item.status === "en proceso" ? "pill warning" : "pill"}>{item.status}</span>
+                    {item.modality ? <span className="muted">{item.modality}</span> : null}
+                  </div>
+                  <h3>{item.safe_profile.label}</h3>
+                  <p>{item.safe_profile.composition}</p>
+                  <dl>
+                    <div>
+                      <dt>Barrio</dt>
+                      <dd>{item.safe_profile.neighborhood}</dd>
+                    </div>
+                    <div>
+                      <dt>Necesidad</dt>
+                      <dd>{item.safe_profile.primary_need}</dd>
+                    </div>
+                    <div>
+                      <dt>Aporte sugerido</dt>
+                      <dd>{item.safe_profile.suggested_amount ? formatMoney(item.safe_profile.suggested_amount, "ARS") : "A coordinar"}</dd>
+                    </div>
+                  </dl>
+                  {item.status === "en proceso" && item.reserved_until ? (
+                    <small>Reserva activa · {formatTimeLeft(item.reserved_until)}</small>
+                  ) : null}
+                  {item.status === "acompañado" ? (
+                    <small>{item.helper_label ?? "Persona externa"} acompaña este perfil</small>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </article>
+        );
+      })}
+      {data.accompaniments.length === 0 ? <EmptyState text="Todavía no hay campañas con perfiles seguros." /> : null}
+    </section>
+  );
+}
+
 function DonationsTab({ data }: { data: DashboardData }) {
   return (
     <section className="donations-layout">
@@ -290,6 +360,11 @@ function formatMoney(value: number, currency: string) {
 function getProgress(current: number, goal: number | null) {
   if (!goal || goal <= 0) return 0;
   return Math.min(100, Math.round((current / goal) * 100));
+}
+
+function formatTimeLeft(value: string) {
+  const minutes = Math.max(0, Math.ceil((new Date(value).getTime() - Date.now()) / 60000));
+  return `vence en ${minutes} min`;
 }
 
 function formatItems(items: unknown) {

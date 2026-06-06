@@ -639,37 +639,49 @@ export type Database = {
       matches: {
         Row: {
           beneficiary_id: string | null
+          campaign_id: string | null
+          confirmed_at: string | null
           created_at: string
           donation_id: string | null
           donor_id: string | null
           id: string
           match_score: number | null
+          modality: string | null
           notes: string | null
           organization_id: string
+          reserved_until: string | null
           status: string
           updated_at: string
         }
         Insert: {
           beneficiary_id?: string | null
+          campaign_id?: string | null
+          confirmed_at?: string | null
           created_at?: string
           donation_id?: string | null
           donor_id?: string | null
           id?: string
           match_score?: number | null
+          modality?: string | null
           notes?: string | null
           organization_id: string
+          reserved_until?: string | null
           status?: string
           updated_at?: string
         }
         Update: {
           beneficiary_id?: string | null
+          campaign_id?: string | null
+          confirmed_at?: string | null
           created_at?: string
           donation_id?: string | null
           donor_id?: string | null
           id?: string
           match_score?: number | null
+          modality?: string | null
           notes?: string | null
           organization_id?: string
+          reserved_until?: string | null
           status?: string
           updated_at?: string
         }
@@ -679,6 +691,13 @@ export type Database = {
             columns: ["beneficiary_id"]
             isOneToOne: false
             referencedRelation: "beneficiaries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "matches_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
             referencedColumns: ["id"]
           },
           {
@@ -1007,7 +1026,20 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      reserve_next_beneficiary: {
+        Args: {
+          p_campaign_id: string
+          p_donor_id: string
+          p_organization_id: string
+          p_ttl_minutes?: number
+        }
+        Returns: {
+          beneficiary_id: string
+          match_id: string
+          reserved_until: string
+          safe_profile: Json
+        }[]
+      }
     }
     Enums: {
       [_ in never]: never

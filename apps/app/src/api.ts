@@ -8,12 +8,14 @@ export interface DashboardData {
     totalAttendees: number;
     donations: number;
     donationAmount: number;
+    accompaniedProfiles: number;
   };
   rawEvents: RawEventItem[];
   tasks: TaskItem[];
   activities: ActivityItem[];
   campaigns: CampaignItem[];
   donations: DonationItem[];
+  accompaniments: AccompanimentCampaign[];
 }
 
 export interface RawEventItem {
@@ -78,6 +80,40 @@ export interface DonationItem {
   status: string;
   payment_link: string | null;
   created_at: string;
+}
+
+export interface AccompanimentCampaign {
+  campaign_id: string;
+  campaign_name: string;
+  total: number;
+  available: number;
+  in_process: number;
+  accompanied: number;
+  committed_amount: number;
+  promised_goods: string[];
+  items: AccompanimentItem[];
+}
+
+export interface AccompanimentItem {
+  beneficiary_id: string;
+  match_id: string | null;
+  status: "disponible" | "en proceso" | "acompañado";
+  helper_label: string | null;
+  modality: "dinero" | "especie" | null;
+  reserved_until: string | null;
+  confirmed_at: string | null;
+  safe_profile: SafeProfile;
+}
+
+export interface SafeProfile {
+  campaign_id: string | null;
+  label: string;
+  neighborhood: string;
+  composition: string;
+  primary_need: string;
+  suggested_amount: number | null;
+  goods_suggestion: string | null;
+  sort_order: number;
 }
 
 export async function getDashboard(signal?: AbortSignal): Promise<DashboardData> {
