@@ -8,6 +8,21 @@ export function now(): string {
   });
 }
 
+export interface Sender {
+  id: string;
+  label: string;
+  /** teléfono E.164 que se manda al backend (define la rama por whitelist) */
+  phone: string;
+  isMember: boolean;
+}
+
+/** Remitentes simulables en el chat del bot (members vs externo). */
+export const SENDERS: Sender[] = [
+  { id: "maria", label: "María (coordinadora)", phone: "+5493410000001", isMember: true },
+  { id: "pedro", label: "Pedro (campo)", phone: "+5493410000002", isMember: true },
+  { id: "externo", label: "Donante externo", phone: "+5499999999999", isMember: false },
+];
+
 export const CHATS: Chat[] = [
   {
     id: "huella",
