@@ -6,8 +6,8 @@ export type HuellaClient = SupabaseClient<Database>;
 
 /**
  * Crea un cliente tipado.
- * - En el frontend usá la `anon`/publishable key (respeta RLS por organización).
- * - En el backend usá la `service_role` key (bypassa RLS).
+ * - En el frontend usá la publishable key (sb_publishable_...): respeta RLS por organización.
+ * - En el backend usá la secret key (sb_secret_...): bypassa RLS.
  */
 export function createHuellaClient(
   supabaseUrl: string,
