@@ -1,0 +1,146 @@
+erDiagram
+    ORGANIZATIONS ||--o{ MEMBERS : tiene
+    ORGANIZATIONS ||--o{ RAW_EVENTS : recibe
+    ORGANIZATIONS ||--o{ PROGRAMS : ejecuta
+    ORGANIZATIONS ||--o{ TASKS : posee
+    ORGANIZATIONS ||--o{ DECISIONS : posee
+    ORGANIZATIONS ||--o{ ACTIVITIES : posee
+    ORGANIZATIONS ||--o{ BENEFICIARIES : registra
+    ORGANIZATIONS ||--o{ REPORTS : genera
+
+    MEMBERS ||--o{ RAW_EVENTS : envia
+    MEMBERS ||--o{ TASKS : responsable
+
+    RAW_EVENTS ||--o{ TASKS : genera
+    RAW_EVENTS ||--o{ DECISIONS : genera
+    RAW_EVENTS ||--o{ ACTIVITIES : genera
+    RAW_EVENTS ||--o{ ATTACHMENTS : contiene
+
+    PROGRAMS ||--o{ ACTIVITIES : agrupa
+
+    ACTIVITIES ||--o{ ACTIVITY_BENEFICIARIES : incluye
+    BENEFICIARIES ||--o{ ACTIVITY_BENEFICIARIES : participa
+    ACTIVITIES ||--o{ ATTACHMENTS : evidencia
+
+    ORGANIZATIONS {
+        uuid id PK
+        text name
+        text timezone
+        timestamptz created_at
+    }
+
+    MEMBERS {
+        uuid id PK
+        uuid organization_id FK
+        text full_name
+        text phone "WhatsApp E164"
+        text role "coordinator volunteer field admin"
+        timestamptz created_at
+    }
+
+    RAW_EVENTS {
+        uuid id PK
+        uuid organization_id FK
+        uuid sender_member_id FK "nullable"
+        text channel "whatsapp"
+        text external_id "id Evolution o Chatwoot"
+        text content_text
+        text media_type "text audio image doc"
+        text media_url
+        timestamptz received_at "fecha de recepcion"
+        timestamptz occurred_at "fecha del hecho nullable"
+        text status "ciclo de vida del mensaje"
+        text detected_intent "task activity decision query ambiguous"
+        numeric confidence
+        boolean contains_sensitive_data
+        boolean is_deferred "llego tarde offline"
+        jsonb raw_payload
+        timestamptz created_at
+    }
+
+    PROGRAMS {
+        uuid id PK
+        uuid organization_id FK
+        text name
+        text description
+    }
+
+    TASKS {
+        uuid id PK
+        uuid organization_id FK
+        uuid raw_event_id FK "origen"
+        text title
+        text description
+        uuid assignee_member_id FK "responsable"
+        uuid created_by_member_id FK
+        date due_date "vencimiento"
+        text task_type "task reminder maintenance"
+        text status "open done cancelled"
+        timestamptz created_at
+    }
+
+    DECISIONS {
+        uuid id PK
+        uuid organization_id FK
+        uuid raw_event_id FK "origen"
+        text description
+        timestamptz decided_at
+        uuid created_by_member_id FK
+        timestamptz created_at
+    }
+
+    ACTIVITIES {
+        uuid id PK
+        uuid organization_id FK
+        uuid program_id FK "nullable"
+        uuid raw_event_id FK "origen"
+        text title
+        text location
+        timestamptz occurred_at "fecha del hecho"
+        int attendees_count
+        int volunteers_count
+        text qualitative_notes
+        boolean is_deferred
+        text status "draft confirmed"
+        timestamptz created_at
+    }
+
+    BENEFICIARIES {
+        uuid id PK
+        uuid organization_id FK
+        text full_name "PII restringido"
+        text external_ref "doc legajo PII"
+        jsonb demographics "PII"
+        text notes "sensible"
+        timestamptz created_at
+    }
+
+    ACTIVITY_BENEFICIARIES {
+        uuid id PK
+        uuid activity_id FK
+        uuid beneficiary_id FK
+        text role_or_status "asistio derivado seguimiento"
+    }
+
+    ATTACHMENTS {
+        uuid id PK
+        uuid organization_id FK
+        uuid raw_event_id FK "origen"
+        uuid activity_id FK "nullable"
+        text type "image audio doc"
+        text url
+        jsonb metadata "geo timestamp"
+        timestamptz created_at
+    }
+
+    REPORTS {
+        uuid id PK
+        uuid organization_id FK
+        text title
+        date period_start
+        date period_end
+        text audience "internal funder donor"
+        text format "es en template"
+        jsonb content "metricas agregadas"
+        timestamptz generated_at
+    }
